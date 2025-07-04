@@ -2,17 +2,28 @@ import requests
 import datetime
 import time
 import pytz
+from flask import Flask
+import threading
 
 # === KONFIGURASI ===
 BOT_TOKEN = '8177793125:AAF1LPZ4rMJ3zZSzsTi4VxQzJt3LNvOBU1w'
 CHAT_ID = '-1002790497800'
 API_KEY = '29341fd3f882419b81d1d602b66a1c7d'
-API_URL = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&outputsize=50&apikey={API_KEY}'
+API_URL = f'https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=5min&outputsize=100&apikey={API_KEY}'
 
 WIB = pytz.timezone('Asia/Jakarta')
 last_signal = None
-last_alert = None
 
+# === FLASK KEEP ALIVE ===
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "✅ Bot is running!"
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+threading.Thread(target=run_flask).start()
+
+# === KIRIM SINYAL ===
 def send_signal(text):
     try:
         requests.post(
@@ -22,13 +33,7 @@ def send_signal(text):
     except Exception as e:
         print("❌ Gagal kirim sinyal:", e)
 
-def calculate_ema(data, period):
-    k = 2 / (period + 1)
-    ema = float(data[0])
-    for price in data[1:]:
-        ema = float(price) * k + ema * (1 - k)
-    return ema
-
+# === HITUNG RSI ===
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return None
@@ -44,8 +49,9 @@ def calculate_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-print("🚀 Bot sinyal aktif...")
+print("🚀 Bot RSI XAU/USD Aktif (5min)...")
 
+# === LOOP UTAMA ===
 while True:
     try:
         now = datetime.datetime.now(WIB).strftime('%H:%M:%S')
@@ -59,50 +65,36 @@ while True:
         candles = res['values'][::-1]
         close_prices = [float(c['close']) for c in candles]
 
-        ema14 = calculate_ema(close_prices[-15:], 14)
-        ema50 = calculate_ema(close_prices[-50:], 50)
         rsi = calculate_rsi(close_prices)
-
         current_price = close_prices[-1]
-        diff = abs(ema14 - ema50)
 
-        direction = None
-        if ema14 > ema50 and rsi > 50:
-            direction = "BUY"
-        elif ema14 < ema50 and rsi < 50:
-            direction = "SELL"
+        if rsi is None:
+            print("❌ Data tidak cukup untuk hitung RSI")
+            time.sleep(10)
+            continue
 
-        if direction and direction != last_signal:
-            pip = 0.10
-            tp1 = current_price + 3 * pip if direction == "BUY" else current_price - 3 * pip
-            tp2 = current_price + 5 * pip if direction == "BUY" else current_price - 5 * pip
-            sl = current_price - 3 * pip if direction == "BUY" else current_price + 3 * pip
-
+        if rsi < 25 and last_signal != "BUY":
             send_signal(
-                f"🚀 *Signal {direction} Detected!*\n"
-                f"📊 Entry: {current_price:.2f}\n"
-                f"🎯 TP1: {tp1:.2f} | TP2: {tp2:.2f}\n"
-                f"🛡️ SL: {sl:.2f}\n"
-                f"🧠 EMA14 {'above' if direction == 'BUY' else 'below'} EMA50\n"
-                f"📈 RSI: {rsi:.1f} ✅\n"
+                f"📉 *RSI Oversold Detected!*\n"
+                f"🚀 Signal: *BUY*\n"
+                f"💰 Price: {current_price:.2f}\n"
+                f"📊 RSI: {rsi:.1f} (di bawah 25)\n"
                 f"🕒 {now} WIB"
             )
-            last_signal = direction
-            last_alert = None  # reset alert supaya muncul lagi nanti
+            last_signal = "BUY"
 
-        elif diff < 0.15 and rsi:  # alert crossover
-            if last_alert != direction:
-                alert_type = "BUY" if ema14 > ema50 else "SELL"
-                send_signal(
-                    f"⚠️ *Potensi {alert_type}*\n"
-                    f"🧠 EMA14 mendekati EMA50\n"
-                    f"📈 RSI: {rsi:.1f}\n"
-                    f"🕒 {now} WIB"
-                )
-                last_alert = direction
+        elif rsi > 75 and last_signal != "SELL":
+            send_signal(
+                f"📈 *RSI Overbought Detected!*\n"
+                f"🔻 Signal: *SELL*\n"
+                f"💰 Price: {current_price:.2f}\n"
+                f"📊 RSI: {rsi:.1f} (di atas 75)\n"
+                f"🕒 {now} WIB"
+            )
+            last_signal = "SELL"
 
         else:
-            print(f"[{now}] EMA14: {ema14:.2f} | EMA50: {ema50:.2f} | RSI: {rsi:.1f} | Monitoring...")
+            print(f"[{now}] RSI: {rsi:.1f} | Harga: {current_price:.2f} | Monitoring...")
 
     except Exception as e:
         print("❌ ERROR:", e)
